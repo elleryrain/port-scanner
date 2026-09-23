@@ -4,29 +4,31 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
+	"os/signal"
 	"sort"
 	"strconv"
 	"sync"
 	"time"
 )
+
 const (
-		workers = 3
-		maxPort = 65535
-		connectionTimeout = 500 * time.Millisecond
-		scanTimeout = 20 * time.Second
+	workers           = 3
+	maxPort           = 65535
+	connectionTimeout = 500 * time.Millisecond
 )
 
 type ScanStats struct {
 	mu sync.Mutex
 
-	started int
-	active int
-	checked int
-	failed int
-	timeout int
-	canceled int
+	started   int
+	active    int
+	checked   int
+	failed    int
+	timeout   int
+	canceled  int
 	openPorts []int
-} 
+}
 
 func (s *ScanStats) Print(startedAt time.Time) {
 	s.mu.Lock()
@@ -46,10 +48,10 @@ func (s *ScanStats) Print(startedAt time.Time) {
 	speed := float64(checked) / elapsed.Seconds()
 
 	fmt.Printf(
-		" Время: %s | Проверено: %d/%d (%.1f%%) | " +
-		"Открыто: %d | Ошибки: %d | Тайм-ауты: %d |" +
-		"Отменено: %d | Активно: %d | Не начато: %d" + 
-		"Скорость: %.1f порт /c\n",
+		" Время: %s | Проверено: %d/%d (%.1f%%) | "+
+			"Открыто: %d | Ошибки: %d | Тайм-ауты: %d |"+
+			"Отменено: %d | Активно: %d | Не начато: %d"+
+			"Скорость: %.1f порт /c\n",
 		elapsed.Round(time.Millisecond),
 		checked,
 		maxPort,
@@ -59,7 +61,7 @@ func (s *ScanStats) Print(startedAt time.Time) {
 		timeout,
 		canceled,
 		active,
-		maxPort - started,
+		maxPort-started,
 		speed,
 	)
 }
@@ -68,17 +70,17 @@ func main() {
 
 	host := "127.0.0.1"
 
-	ctx, cancel := context.WithTimeout(
+	ctx, stop := signal.NotifyContext(
 		context.Background(),
-		scanTimeout,
+		os.Interrupt,
 	)
-	
-	defer cancel()
 
-	dialer := net.Dialer {
+	defer stop()
+
+	dialer := net.Dialer{
 		Timeout: connectionTimeout,
 	}
-	
+
 	var stats ScanStats
 
 	progressCtx, stopProgress := context.WithCancel(
@@ -98,19 +100,19 @@ func main() {
 
 		for {
 			select {
-				case <- ticker.C:
-					stats.Print(startedAt)
-				case <- progressCtx.Done():
+			case <-ticker.C:
+				stats.Print(startedAt)
+			case <-progressCtx.Done():
 				return
-			}	
+			}
 		}
 	}()
-	
+
 	var wg sync.WaitGroup
 	wg.Add(workers)
 
 	for start := 1; start <= workers; start++ {
-		go func (firstPort int)  {
+		go func(firstPort int) {
 			defer wg.Done()
 
 			for port := firstPort; port <= maxPort; port += workers {
@@ -129,9 +131,9 @@ func main() {
 				if err == nil {
 					conn.Close()
 				}
-				
-				canceled := err != nil &&  ctx.Err() != nil
-				
+
+				canceled := err != nil && ctx.Err() != nil
+
 				stats.mu.Lock()
 				stats.active--
 
@@ -142,7 +144,7 @@ func main() {
 				case err == nil:
 					stats.checked++
 					stats.openPorts = append(stats.openPorts, port)
-				
+
 				default:
 					stats.checked++
 					netErr, ok := err.(net.Error)
@@ -157,8 +159,7 @@ func main() {
 					return
 				}
 			}
-			
-			
+
 		}(start)
 	}
 
@@ -170,12 +171,11 @@ func main() {
 	if stats.checked == maxPort {
 		fmt.Println("Сканирование завершено")
 	} else {
-		fmt.Println("Сканирование отстановлено: ", ctx.Err())
+		fmt.Println("Сканирование остановлено: ", ctx.Err())
 	}
-	
+
 	stats.Print(startedAt)
 	sort.Ints(stats.openPorts)
-
 
 	fmt.Printf("Открытые TCP-порты (%d): %v\n", len(stats.openPorts), stats.openPorts)
 }
