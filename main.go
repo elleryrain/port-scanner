@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -132,7 +133,7 @@ func main() {
 					conn.Close()
 				}
 
-				canceled := err != nil && ctx.Err() != nil
+				canceled := errors.Is(err, context.Canceled)
 
 				stats.mu.Lock()
 				stats.active--
